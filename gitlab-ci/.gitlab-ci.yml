@@ -1,0 +1,22 @@
+stages:
+  - build
+  - deploy
+
+build:
+  stage: build
+  script:
+    - docker login -u $DOCKERHUB_USER -p $DOCKERHUB_TOKEN
+    - docker build -t $DOCKERHUB_USER/test-app:latest .
+    - docker push $DOCKERHUB_USER/test-app:latest
+
+deploy:
+  stage: deploy
+  image:
+    name: bitnami/kubectl:latest
+    entrypoint: ['']
+  script:
+    - export KUBECONFIG=$KUBECONFIG_CONTENT
+    - kubectl apply -f k8s/
+    - kubectl rollout restart deployment/test-app -n default
+  only:
+    - main
