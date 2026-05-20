@@ -1,113 +1,98 @@
-# Datacenter GitOps — App of Apps
+# Kubernetes Cluster on VMware vSphere — Datacenter Project
 
-Full GitOps management of Kubernetes cluster via ArgoCD App of Apps pattern. One command recreates the entire cluster from Git.
+Production-grade Kubernetes cluster on real hardware in a datacenter with full DevOps stack: CI/CD, monitoring, logging, secrets management, auto-scaling, and GitOps.
 
-## One Command to Rule Them All
+## Stack
 
-```bash
-kubectl apply -f datacenter-apps.yaml
-```
+| Component | Tool | Purpose |
+|-----------|------|---------|
+| Orchestration | Kubernetes v1.30 (kubeadm) | Container orchestration |
+| Runtime | containerd v2.2.1 | Container runtime |
+| CNI | Calico | Pod networking + Network Policies |
+| Package Manager | Helm v3 | Kubernetes package management |
+| CI/CD | GitLab EE + Runner | Build and helm bump pipelines |
+| GitOps | ArgoCD (App of Apps) | Automated deployments from Git |
+| Monitoring | Prometheus + Grafana | Metrics and dashboards |
+| Logging | Loki + Promtail | Centralized log aggregation |
+| Alerting | Alertmanager → Telegram | Real-time notifications |
+| Ingress | Nginx Ingress Controller | Traffic routing |
+| Secrets | HashiCorp Vault | Sidecar injection, zero secrets in Git |
+| Auto-scaling | HPA + metrics-server | Scale pods under load |
+| Security | Network Policies | Namespace isolation |
+| Registry | Docker Hub | Container image storage |
 
-ArgoCD automatically deploys everything:
-
-| Application | Source | What it does |
-|-------------|--------|-------------|
-| prometheus | prometheus-community helm chart | Monitoring + Grafana dashboards |
-| loki | grafana helm chart | Centralized log aggregation |
-| promtail | grafana helm chart | Log collection from all nodes |
-| ingress-nginx | kubernetes helm chart | Traffic routing |
-| vault | hashicorp helm chart | Secret management via sidecar |
-| test-app | this repo (k8s/test-app) | Flask app with Vault + HPA |
-| watchlist-dev | bog-watchlist-helm repo | Microservice app |
-| network-policies | this repo (k8s/network-policies) | Namespace isolation |
-
-## CI/CD Flow — Helm Bump
-
-```
-Developer pushes code to GitLab (10.100.0.220)
-  → GitLab Runner builds Docker image with timestamp tag
-  → Pushes image to Docker Hub
-  → CI clones this repo and updates image tag (helm bump)
-  → CI pushes change to GitHub
-  → ArgoCD detects change and deploys new version
-  → CI has NO access to the cluster — only Git
-```
-
-## Alerting
-
-Alertmanager sends real-time alerts to Telegram bot when issues occur in the cluster (pod crashes, node unreachable, CPU overcommit).
-
-## Auto-Scaling (HPA)
-
-HorizontalPodAutoscaler monitors CPU usage and scales pods automatically:
+## CI/CD Pipeline — Helm Bump
 
 ```
-Normal load:  1 pod  (cpu: 8%)
-Under attack: 3 pods (cpu: 100% → distributed to 37% each)
-Load drops:   1 pod  (scales back down after 5 minutes)
+Developer pushes code to GitLab
+  → Runner builds Docker image (tag: timestamp)
+  → Pushes to Docker Hub
+  → CI updates image tag in GitOps repo (helm bump)
+  → ArgoCD detects Git change
+  → ArgoCD deploys new version to cluster
+  → CI never touches kubectl — only Git
 ```
 
-## Network Policies
+## Infrastructure
 
-Calico-based network policies isolate namespaces:
-- Pods in watchlist-dev can only talk to each other
-- External traffic allowed only to frontend and test-app
-- Prometheus can reach all namespaces for metrics collection
+| VM | Role | IP | RAM | Disk | OS |
+|----|------|----|-----|------|----|
+| k8s-master | Control Plane | 10.100.0.200 | 4GB | 30GB | Ubuntu 24.04 |
+| k8s-worker | Worker Node | 10.100.0.210 | 8GB | 17GB | Ubuntu 24.04 |
+| gitlab | GitLab + Runner | 10.100.0.220 | 8GB | 30GB | Ubuntu 24.04 |
 
-## Observability Stack
+## Namespaces
 
-- **Metrics**: Prometheus collects, Grafana visualizes (port 30030)
-- **Logs**: Promtail collects from all pods → Loki stores → Grafana queries
-- **Alerts**: Alertmanager evaluates rules → Telegram bot notifications
+| Namespace | Components |
+|-----------|-----------|
+| default | test-app (Flask + Vault sidecar + HPA) |
+| watchlist-dev | Watchlist (FastAPI + PostgreSQL + Redis + Celery + Nginx) |
+| argocd | ArgoCD server and controllers |
+| monitoring | Prometheus + Grafana + Alertmanager + Loki + Promtail |
+| ingress-nginx | Nginx Ingress Controller |
+| vault | HashiCorp Vault + Agent Injector |
 
-## Architecture
+## Key Features Demonstrated
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│                      VMware vSphere                          │
-│                                                              │
-│  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐ │
-│  │  k8s-master    │  │  k8s-worker    │  │   GitLab       │ │
-│  │  10.100.0.200  │  │  10.100.0.210  │  │  10.100.0.220  │ │
-│  │  4GB RAM       │  │  8GB RAM       │  │  8GB RAM       │ │
-│  │                │  │                │  │                │ │
-│  │  Control Plane │  │  Workloads     │  │  GitLab EE     │ │
-│  │  ArgoCD        │  │  Pods + HPA    │  │  Runner        │ │
-│  │  etcd          │  │  Vault         │  │  Docker        │ │
-│  └────────────────┘  └────────────────┘  └────────────────┘ │
-└──────────────────────────────────────────────────────────────┘
-```
+**GitOps (App of Apps)**: One ArgoCD Application creates all others. Entire cluster reproducible from a single Git repo with one command.
 
-## Project Structure
+**Helm Bump CI/CD**: GitLab CI builds and pushes images, then updates image tags in the GitOps repo. CI has no cluster access — ArgoCD handles all deployments.
 
-```
-datacenter-gitops/
-├── apps/
-│   ├── Chart.yaml
-│   ├── values.yaml
-│   └── templates/
-│       ├── prometheus.yaml
-│       ├── loki.yaml
-│       ├── promtail.yaml         (new)
-│       ├── ingress.yaml
-│       ├── vault.yaml
-│       ├── test-app.yaml
-│       ├── watchlist.yaml
-│       └── network-policies.yaml (new)
-└── k8s/
-    ├── test-app/
-    │   └── deployment.yaml       (HPA + resources)
-    └── network-policies/
-        └── default-deny.yaml     (new)
-```
+**Vault Sidecar Injection**: Secrets injected into pods via sidecar container. Zero secrets stored in Git. Applications read secrets from files, not environment variables.
 
-## Related Repos
+**Auto-Scaling**: HPA scales pods based on CPU utilization. Tested with simulated DDoS: 1 pod → 3 pods under load → back to 1 when load drops.
 
-- [datacenter-k8s](https://github.com/MassonTG/datacenter-k8s) — cluster setup documentation
-- [bog-watchlist-app](https://github.com/bog-watchlist/bog-watchlist-app) — Watchlist source code + CI
-- [bog-watchlist-helm](https://github.com/bog-watchlist/bog-watchlist-helm) — Watchlist Helm charts
-- [bog-watchlist-argocd](https://github.com/bog-watchlist/bog-watchlist-argocd) — Watchlist ArgoCD Applications
+**Centralized Logging**: Promtail collects logs from all pods on all nodes, sends to Loki, queryable in Grafana with LogQL.
 
-## Full Stack
+**Real-time Alerting**: Alertmanager sends alerts to Telegram bot when pods crash, nodes go down, or resources are overcommitted.
 
-Kubernetes v1.30 (kubeadm) · containerd v2.2.1 · Calico CNI · Helm v3 · ArgoCD (App of Apps) · GitLab EE + Runner · Prometheus · Grafana · Loki · Promtail · Alertmanager · Telegram Bot · Nginx Ingress · HashiCorp Vault · HPA · Network Policies · metrics-server · Docker Hub
+**Network Isolation**: Calico Network Policies restrict traffic between namespaces. Only explicitly allowed communication passes through.
+
+## Repositories
+
+| Repo | Purpose |
+|------|---------|
+| [datacenter-k8s](https://github.com/MassonTG/datacenter-k8s) | Documentation and configs (this repo) |
+| [datacenter-gitops](https://github.com/MassonTG/datacenter-gitops) | App of Apps — full cluster from one repo |
+| [bog-watchlist-app](https://github.com/bog-watchlist/bog-watchlist-app) | Watchlist source code + CI |
+| [bog-watchlist-helm](https://github.com/bog-watchlist/bog-watchlist-helm) | Watchlist Helm charts (dev/prod values) |
+| [bog-watchlist-argocd](https://github.com/bog-watchlist/bog-watchlist-argocd) | Watchlist ArgoCD Applications |
+
+## Quick Reproduce
+
+1. Create 3 Ubuntu 24.04 VMs on vSphere (or any hypervisor)
+2. Install containerd + kubeadm, init cluster, join worker
+3. Install Calico CNI, Helm
+4. Install ArgoCD, apply datacenter-apps Application
+5. ArgoCD deploys everything else automatically from Git
+6. Install GitLab EE + Runner on separate VM
+7. Full production cluster in ~30 minutes
+
+## Documentation
+
+- [VM Setup](docs/01-vm-setup.md)
+- [Kubernetes Setup](docs/02-kubernetes-setup.md)
+- [Monitoring](docs/03-monitoring.md)
+- [Ingress](docs/04-ingress.md)
+- [GitLab CI/CD](docs/05-gitlab-cicd.md)
+- [Vault](docs/06-vault.md)
